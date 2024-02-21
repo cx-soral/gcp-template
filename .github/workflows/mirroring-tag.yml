@@ -1,0 +1,65 @@
+name: Github - mirroring - GCP - Tags
+
+on:
+  workflow_run:
+    workflows: ["Github - mirroring - GCP - Prd"]
+    branches: [main]
+    types:
+      - completed
+
+jobs:
+  check_tag:
+    runs-on: ubuntu-latest
+    outputs:
+      is_tag: ${{ steps.tag_check.outputs.is_tag }}
+      tag_name: ${{ steps.tag_check.outputs.tag_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+          fetch-tags: true
+      - name: Check for Tag
+        id: tag_check
+        run: |
+          TAG_NAME=$(git tag --points-at ${{ github.event.workflow_run.head_commit.id }} | head -n 1)
+          if [[ -z "$TAG_NAME" ]]; then
+            echo "This is not a tag push."
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+          else
+            echo "This workflow was triggered by a tag: $TAG_NAME"
+            echo "is_tag=true" >> $GITHUB_OUTPUT
+            echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          fi
+
+  tagging_remote:
+    needs: check_tag
+    if: needs.check_tag.outputs.is_tag == 'true'
+    runs-on: ubuntu-latest
+    environment: prd
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - id: auth
+      name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        project_id: ${{ secrets.PROJECT_ID }}
+        workload_identity_provider: ${{ secrets.SECRET_WIP_NAME }}
+        service_account: ${{ secrets.PROVIDER_SA_EMAIL }}
+
+    - name: Tagging remote repository
+      run: |
+        gcloud config set account '${{ secrets.PROVIDER_SA_EMAIL }}'
+        gcloud info
+        git config --global credential.https://source.developers.google.com.helper gcloud.sh
+        mkdir ../target && cd ../target
+        git clone https://source.developers.google.com/p/${{ secrets.PROJECT_ID }}/r/${GITHUB_REPOSITORY#*/}
+        cd ${GITHUB_REPOSITORY#*/}
+        git checkout main
+        git tag ${{ needs.check_tag.outputs.tag_name }}
+        git push origin ${{ needs.check_tag.outputs.tag_name }}

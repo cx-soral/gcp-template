@@ -1,0 +1,51 @@
+name: Github - mirroring - GCP - Dev
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  mirroring:
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Prepare Source
+      run: |
+        mkdir ../source
+        cp -r * ../source
+
+    - id: 'auth'
+      name: 'Authenticate to Google Cloud'
+      uses: 'google-github-actions/auth@v2'
+      with:
+        project_id: ${{ secrets.PROJECT_ID }}
+        workload_identity_provider: ${{ secrets.SECRET_WIP_NAME }}
+        service_account: ${{ secrets.PROVIDER_SA_EMAIL }}
+
+    - name: Use gcloud in GitHub Actions
+      run: |
+        gcloud config set account '${{ secrets.PROVIDER_SA_EMAIL }}'
+        gcloud info
+        git config --global user.email "${{ github.event.head_commit.author.email }}"
+        git config --global user.name "${{ github.event.head_commit.author.name }}"
+        git config --global credential.https://source.developers.google.com.helper gcloud.sh
+        mkdir ../target && cd ../target
+        git clone https://source.developers.google.com/p/${{ secrets.PROJECT_ID }}/r/${GITHUB_REPOSITORY#*/}
+        cd ${GITHUB_REPOSITORY#*/}
+        git checkout develop || git checkout -b develop
+        rm -rf *
+        cp -r ../../source/* .
+        git add .
+        git commit -m "${{ github.event.head_commit.message }}" || COMMIT_FAILED=true
+        if [ "$COMMIT_FAILED" != true ]; then
+          git push -u origin develop
+        else
+          echo "Commit failed, skipping push."
+        fi
